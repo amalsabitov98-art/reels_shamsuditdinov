@@ -20,7 +20,7 @@
  * Usage: node scripts/flow-upload-video.mjs "d:\\...\\sysv1.mp4"
  */
 import { chromium } from '@playwright/test';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -53,12 +53,79 @@ p.on('response', r => {
   if (UPLOADISH.test(u)) netUpload.push({ st: r.status(), m: r.request().method(), u: u.slice(0, 120) });
 });
 
-// safety net: если клик всё же вызовет filechooser — обслужим его
+// safety net: если клик вызовет системный file chooser — обслужим его
 let chooserHandled = false;
+let method = '';
 p.on('filechooser', async fc => {
-  try { await fc.setFiles(ABS); chooserHandled = true; console.log('filechooser -> setFiles OK'); }
+  try {
+    await fc.setFiles(ABS);
+    chooserHandled = true;
+    method = 'filechooser';
+    console.log('filechooser -> setFiles OK');
+  }
   catch (e) { console.log('filechooser err:', e.message); }
 });
+
+// В новом flow.google.com input уже может присутствовать в DOM и больше не
+// требовать промежуточной кнопки "Upload media". Проверяем все подходящие input.
+async function setExistingFileInput(stage) {
+  const loc = p.locator('input[type=file]');
+  const n = await loc.count();
+  const wantsVideo = /\.(mp4|mov|webm)$/i.test(ABS);
+  const accepts = [];
+  const candidates = [];
+  for (let i = 0; i < n; i++) {
+    const accept = (await loc.nth(i).getAttribute('accept')) || '';
+    accepts.push(accept);
+    if (!accept || /\*/.test(accept) || (wantsVideo ? /video/i.test(accept) : /image/i.test(accept))) candidates.push(i);
+  }
+  console.log(`${stage}: file inputs =`, JSON.stringify(accepts));
+  for (const i of candidates.reverse()) {
+    try {
+      await loc.nth(i).setInputFiles(ABS);
+      chooserHandled = true;
+      method = `input#${i} (${stage}, accept=${accepts[i] || 'any'})`;
+      console.log('->', method);
+      return true;
+    } catch (e) {
+      console.log(`input#${i} rejected:`, e.message.split('\n')[0]);
+    }
+  }
+  return false;
+}
+
+// Последний вариант для нового пустого проекта — настоящий drop событиями на
+// область с текстом "перетащите медиафайлы". Части короткие, поэтому передача
+// файла через CDP не создаёт заметной нагрузки.
+async function dropOnWorkspace() {
+  const ext = path.extname(ABS).toLowerCase();
+  const mime = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'video/mp4';
+  const base64 = readFileSync(ABS).toString('base64');
+  const dt = await p.evaluateHandle(({ data, name, type }) => {
+    const raw = atob(data);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], name, { type }));
+    return transfer;
+  }, { data: base64, name: BASE, type: mime });
+  const hint = p.getByText(/перетащите медиафайлы|drag.*media/i).first();
+  const target = await hint.count() ? hint : p.locator('body');
+  try {
+    await target.dispatchEvent('dragenter', { dataTransfer: dt });
+    await target.dispatchEvent('dragover', { dataTransfer: dt });
+    await target.dispatchEvent('drop', { dataTransfer: dt });
+    chooserHandled = true;
+    method = 'drag-and-drop';
+    console.log('-> drag-and-drop OK');
+    return true;
+  } catch (e) {
+    console.log('drag-and-drop err:', e.message.split('\n')[0]);
+    return false;
+  } finally {
+    await dt.dispose();
+  }
+}
 
 // ── снапшот строк пикера (имя + Image/Video) для диффа ──────────────────────
 async function pickerRows() {
@@ -80,17 +147,36 @@ async function pickerRows() {
 async function scrollListTop() { await p.mouse.move(790, 400); await p.mouse.wheel(0, -2500); await wait(400); }
 
 await p.keyboard.press('Escape'); await wait(600);
+let before = [];
 
-// 1) открыть композер "+"
-const plus = await p.evaluate(() => {
-  const e = [...document.querySelectorAll('button,[role="button"]')].find(x => /add_2|^add$/i.test((x.textContent || '').trim()) && x.getBoundingClientRect().y > innerHeight * 0.8);
-  if (!e) return null; const r = e.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
-});
-if (!plus) { console.error('нет composer +'); process.exit(3); }
-await p.mouse.click(plus.x, plus.y); await wait(1800);
-await scrollListTop();
-const before = await pickerRows();
-console.log('picker rows before:', before.length);
+// 1) Новый Flow часто держит подходящий input прямо на странице.
+let uploadStarted = await setExistingFileInput('initial');
+
+// 2) Если input пока нет, открываем композер "+". В разных версиях Flow это
+// либо сразу file chooser, либо меню с ещё одной кнопкой загрузки.
+if (!uploadStarted) {
+  const plus = await p.evaluate(() => {
+    const all = [...document.querySelectorAll('button,[role="button"]')];
+    const e = all.find(x => {
+      const text = (x.textContent || '').trim();
+      const label = `${x.getAttribute('aria-label') || ''} ${x.getAttribute('title') || ''}`;
+      const r = x.getBoundingClientRect();
+      return r.y > innerHeight * 0.7 && (/add_2|^add$|^\+$/i.test(text) || /add media|upload|добав|загруз/i.test(label));
+    });
+    if (!e) return null;
+    const r = e.getBoundingClientRect();
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+  });
+  if (plus) {
+    await p.mouse.click(plus.x, plus.y); await wait(1800);
+    await scrollListTop();
+    before = await pickerRows();
+    console.log('picker rows before:', before.length);
+    uploadStarted = chooserHandled || await setExistingFileInput('after +');
+  } else {
+    console.log('composer + не найден, пробую drag-and-drop');
+  }
+}
 
 // 2) кнопка модалки "Upload media" (contains, самая маленькая; лигатура в тексте — ищем contains)
 async function findUploadMedia() {
@@ -105,35 +191,22 @@ async function findUploadMedia() {
 }
 let umBtn = await findUploadMedia();
 console.log('Upload media btn:', JSON.stringify(umBtn));
-if (!umBtn) { await p.screenshot({ path: QA + '/upvid-noumbtn.png' }); console.error('НЕ найдена кнопка Upload media модалки'); process.exit(4); }
-await p.mouse.click(umBtn.x, umBtn.y);
-await wait(2000); // дать инжектнуться видео-инпуту
+if (!uploadStarted && umBtn) {
+  await p.mouse.click(umBtn.x, umBtn.y);
+  await wait(2000);
+  uploadStarted = chooserHandled || await setExistingFileInput('after Upload media');
+}
 
-// 3) найти инпут с accept, содержащим video, и залить файл напрямую
-let method = '';
-if (!chooserHandled) {
-  const loc = p.locator('input[type=file]');
-  const n = await loc.count();
-  const accepts = [];
-  let vidIdx = -1;
-  for (let i = 0; i < n; i++) { const a = (await loc.nth(i).getAttribute('accept')) || ''; accepts.push(a); if (vidIdx < 0 && /video/i.test(a)) vidIdx = i; }
-  console.log('file inputs accept =', JSON.stringify(accepts));
-  if (vidIdx < 0) {
-    // повторный клик — иногда инпут инжектится не с первого раза
-    await p.mouse.click(umBtn.x, umBtn.y); await wait(2000);
-    const n2 = await loc.count();
-    for (let i = accepts.length; i < n2; i++) { const a = (await loc.nth(i).getAttribute('accept')) || ''; accepts.push(a); if (vidIdx < 0 && /video/i.test(a)) vidIdx = i; }
-  }
-  if (vidIdx < 0) {
-    await p.screenshot({ path: QA + '/upvid-novideoinput.png' });
-    console.error('ВИДЕО-инпут (accept~video) не инжектнулся. accepts=', JSON.stringify(accepts));
-    process.exit(5);
-  }
-  await loc.nth(vidIdx).setInputFiles(ABS);
-  method = `setInputFiles input#${vidIdx} (accept=${accepts[vidIdx]})`;
-  console.log('->', method);
-} else {
-  method = 'filechooser';
+// 3) В новом пустом проекте основным UX может быть только drag-and-drop.
+if (!uploadStarted) uploadStarted = await dropOnWorkspace();
+if (!uploadStarted) {
+  await p.screenshot({ path: QA + '/upvid-noupload.png' });
+  const controls = await p.evaluate(() => [...document.querySelectorAll('button,[role="button"]')]
+    .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })
+    .map(e => `${(e.textContent || '').replace(/\s+/g, ' ').trim()} | ${e.getAttribute('aria-label') || ''}`)
+    .filter(Boolean).slice(-40));
+  console.error('НЕ найдена точка загрузки. Видимые кнопки:', JSON.stringify(controls));
+  process.exit(5);
 }
 await wait(1500);
 await p.screenshot({ path: QA + '/upvid-after-set.png' });
