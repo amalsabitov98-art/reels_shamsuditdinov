@@ -16,6 +16,7 @@
 import { chromium } from '@playwright/test';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { selectProject, readAssetRows, readyAsset } from './flow-evidence.mjs';
 
 const [prefix, dir, fromS, toS] = process.argv.slice(2);
 if (!prefix || !dir) {
@@ -31,8 +32,7 @@ const CDP = process.env.FLOW_CDP || 'http://127.0.0.1:9223';
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
 const b = await chromium.connectOverCDP(CDP);
-const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
-const p = b.contexts()[0].pages().find(x => isFlowProject(x.url()));
+const p = selectProject(b.contexts().flatMap(c => c.pages()));
 if (!p) { console.error('НЕТ вкладки с проектом Flow'); process.exit(1); }
 await p.bringToFront();
 
@@ -69,7 +69,7 @@ async function ensureIngredients() {
     const r = e.getBoundingClientRect();
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
   });
-  if (!chip) { console.log('   ⚠️ чип настроек не найден — режим не проверен'); return; }
+  if (!chip) throw new Error('Режим монтажа не подтверждён. Генерация не запущена. Используйте диагностику Flow.');
   await p.mouse.click(chip.x, chip.y); await wait(1600);
   const hit = await p.evaluate(() => {
     const e = [...document.querySelectorAll('button,[role="button"]')]
@@ -81,6 +81,7 @@ async function ensureIngredients() {
   await wait(800);
   await p.keyboard.press('Escape'); await wait(500);
   console.log(hit ? '   ⚙️ режим Ingredients' : '   ⚠️ кнопка Ingredients не найдена');
+  if (!hit) throw new Error('Ingredients не найден. Нельзя отправлять запрос в неизвестном режиме.');
 }
 
 async function openPicker() {
@@ -113,16 +114,28 @@ async function attach(name) {
   });
   if (!box) throw new Error('поле поиска не найдено');
   await p.mouse.click(box.x, box.y); await wait(300);
+  await p.keyboard.press('Control+A'); await p.keyboard.press('Backspace');
   await p.keyboard.insertText(name); await wait(2400);
+  if (!(await readAssetRows(p)).some(row => readyAsset(row, name))) throw new Error(`Нет готового ассета с именем ${name}.`);
   const before = await chips();
-  const btn = await p.evaluate(() => {
-    const e = [...document.querySelectorAll('button')]
-      .find(x => /İsteme ekle|Add to Prompt|Добавить (в запрос|в промпт)/i.test((x.textContent || '').trim()));
-    if (!e) return null;
+  const btn = await p.evaluate(expected => {
+    const candidates = [...document.querySelectorAll('button')]
+      .filter(x => /İsteme ekle|Add to Prompt|Добавить (в запрос|в промпт)/i.test((x.textContent || '').trim()))
+      .filter(button => {
+        if (!button.getBoundingClientRect().width || button.disabled) return false;
+        for (let e = button.parentElement, depth = 0; e && depth < 4; e = e.parentElement, depth++) {
+          const text = (e.textContent || '').replace(button.textContent || '', '').replace(/\s+/g, ' ').trim();
+          const type = text.match(/(Image|Video|Изображение|Видео)$/i)?.[0];
+          if (type && text.slice(0, -type.length).trim().replace(/\.(png|mp4|mov|webm|jpe?g)$/i, '') === expected) return true;
+        }
+        return false;
+      });
+    if (candidates.length !== 1) return null;
+    const e = candidates[0];
     const r = e.getBoundingClientRect();
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
-  });
-  if (!btn) throw new Error(`ассет «${name}» не найден`);
+  }, name);
+  if (!btn) throw new Error(`Не удалось однозначно найти кнопку прикрепления ассета «${name}».`);
   await p.mouse.click(btn.x, btn.y); await wait(2500);
   const after = await chips();
   if (after <= before) throw new Error(`чип «${name}» не прицепился`);
@@ -156,7 +169,7 @@ async function typePrompt(text) {
 async function send() {
   const go = await p.evaluate(() => {
     const e = [...document.querySelectorAll('button')]
-      .find(x => /arrow_forward/i.test(x.textContent || '') && !x.disabled);
+      .find(x => /arrow_forward/i.test(x.textContent || '') && !x.disabled && x.getBoundingClientRect().y > innerHeight * 0.65);
     if (!e) return null;
     const r = e.getBoundingClientRect();
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
@@ -168,6 +181,8 @@ async function send() {
 
 async function waitDone(maxMin = 10) {
   const deadline = Date.now() + maxMin * 60000;
+  const startDeadline = Date.now() + 60000;
+  let seenBusy = false;
   await wait(8000);
   while (Date.now() < deadline) {
     // подписи бывают турецкие и английские — ловим оба языка
@@ -175,7 +190,9 @@ async function waitDone(maxMin = 10) {
       const t = document.body.innerText;
       return /Oluşturuluyor|oluşturuluyor|Generating|generating|Созда[её]тся|Генерация|генерируется/i.test(t) || /\d{1,3}%/.test(t);
     });
-    if (!busy) return true;
+    if (busy) seenBusy = true;
+    if (!busy && seenBusy) return true;
+    if (!seenBusy && Date.now() > startDeadline) throw new Error('Запуск генерации не подтверждён. Не повторяйте запрос до проверки в Flow.');
     await wait(12000);
   }
   return false;
@@ -192,30 +209,32 @@ const policyHit = () => p.evaluate(() => {
 let ok = 0, bad = 0, policy = 0;
 for (let n = from; n <= to; n++) {
   const promptFile = join(dir, `p${n}-omni.txt`);
-  if (!existsSync(promptFile)) { console.log(`  ⏭  часть ${n}: нет промпта`); continue; }
+  if (!existsSync(promptFile)) { console.log(`  ❌ часть ${n}: нет промпта`); bad++; break; }
   const text = readFileSync(promptFile, 'utf8').replace(/\r?\n+/g, ' ').trim();
   console.log(`\n▶ ${prefix}${n}: борд + видео + промпт ${text.length} симв.`);
   try {
-    await clearChips();
     await ensureIngredients();
+    await clearChips();
     await attach(`${prefix}${n}${BOARD_SUFFIX}`);
     await attach(`${prefix}${n}${VIDEO_SUFFIX}`);
     await typePrompt(text);
     await send();
     console.log('   🚀 отправлено, жду...');
     const done = await waitDone();
+    if (!done) throw new Error('Вышло время ожидания. Статус неизвестен; проверьте Flow перед повтором.');
     if (await policyHit()) {
       policy++;
       console.log('   🚫 policy: генерацию завернули. Со звуком триггером бывает сама речь —');
       console.log('      переписать реплику, НЕ глушить дорожку (правило).');
+      break;
     } else {
-      console.log(done ? '   ✅ генерация завершена' : '   ⏱ вышло время ожидания');
+      console.log('   Индикатор генерации исчез. Проверьте и скачайте результат этой части вручную.');
       ok++;
     }
   } catch (e) {
     bad++;
-    console.log(`   ❌ ${String(e.message).slice(0, 90)}`);
-    await clearChips().catch(() => {});
+    console.log(`   ❌ ${String(e.message)}`);
+    break;
   }
   await wait(5000);
 }

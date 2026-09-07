@@ -23,3 +23,12 @@ test('secrets and generated video are ignored', () => {
   assert.match(ignore, /^auth\/$/m);
   assert.match(ignore, /^workspace\/reels\/\*$/m);
 });
+
+test('UI element references exist and unsafe time-sorted download is not used', () => {
+  const app = readFileSync(join(root, 'docs', 'app.js'), 'utf8');
+  const html = readFileSync(join(root, 'docs', 'index.html'), 'utf8');
+  for (const [, id] of app.matchAll(/\$\('([^']+)'\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing UI element ${id}`);
+  const flow = readFileSync(join(root, 'scripts', 'run-flow.mjs'), 'utf8');
+  assert.doesNotMatch(flow, /await run\('flow-dl-omni/);
+  assert.doesNotMatch(flow, /await run\('omni-assemble/);
+});

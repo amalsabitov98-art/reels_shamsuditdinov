@@ -3,12 +3,13 @@ import express from 'express';
 import multer from 'multer';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { probe, validatePart, validateProject, digest } from './media.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const REELS = join(ROOT, 'workspace', 'reels');
+const REELS = process.env.REELS_WORKSPACE ? resolve(process.env.REELS_WORKSPACE) : join(ROOT, 'workspace', 'reels');
 const UPLOADS = join(REELS, '_uploads');
 const PORT = Number(process.env.REELS_PORT || 3210);
 const PAGES_URL = process.env.REELS_SITE || 'https://amalsabitov98-art.github.io/reels_shamsuditdinov/';
@@ -25,10 +26,13 @@ const python = existsSync(join(ROOT, '.venv', 'Scripts', 'python.exe'))
   : (process.platform === 'win32' ? 'python' : 'python3');
 
 function startJob(label, command, args) {
+  if ([...jobs.values()].some(j => j.status === 'running')) throw Object.assign(new Error('Другая задача ещё выполняется. Дождитесь окончания.'), { status: 409 });
   const id = randomUUID();
   const job = { id, label, status: 'running', log: '', startedAt: new Date().toISOString() };
   jobs.set(id, job);
   const child = spawn(command, args, { cwd: ROOT, env: process.env, shell: false });
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
   const append = chunk => { job.log = (job.log + chunk.toString()).slice(-80000); };
   child.stdout.on('data', append);
   child.stderr.on('data', append);
@@ -43,7 +47,7 @@ function startJob(label, command, args) {
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOADS),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${safe(file.originalname.replace(extname(file.originalname), ''), 'source')}${extname(file.originalname).toLowerCase()}`),
+  filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
 });
 const upload = multer({
   storage,
@@ -66,8 +70,20 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static(join(ROOT, 'docs')));
+// Reserve all mutations, including the time spent receiving an imported video.
+let mutationPending = false;
+app.use('/api', (req, res, next) => {
+  if (!['POST', 'PUT'].includes(req.method)) return next();
+  if (mutationPending || [...jobs.values()].some(j => j.status === 'running')) return res.status(409).json({ error: 'Задача ещё выполняется. Дождитесь окончания перед следующим действием.' });
+  mutationPending = true;
+  let released = false;
+  const release = () => { if (!released) { released = true; mutationPending = false; } };
+  res.on('finish', release);
+  res.on('close', release);
+  next();
+});
 
-app.get('/health', (_req, res) => res.json({ ok: true, name: 'Reels Studio', version: '1.0.0' }));
+app.get('/health', (_req, res) => res.json({ ok: true, name: 'Reels Studio', version: '1.1.0', job: [...jobs.values()].find(j => j.status === 'running') || null }));
 app.get('/api/jobs/:id', (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Задача не найдена.' });
@@ -102,7 +118,9 @@ app.get('/api/projects/:slug', (req, res) => {
   try {
     const project = JSON.parse(readFileSync(projectFile(req.params.slug, 'project.json'), 'utf8'));
     const spec = JSON.parse(readFileSync(projectFile(req.params.slug, 'sb-spec.json'), 'utf8'));
-    res.json({ project: { ...project, hasFinal: existsSync(projectFile(req.params.slug, 'final.mp4')) }, spec });
+    const approvedPath = projectFile(req.params.slug, 'approved-parts.json');
+    const approved = existsSync(approvedPath) ? JSON.parse(readFileSync(approvedPath, 'utf8')) : {};
+    res.json({ project: { ...project, hasFinal: existsSync(projectFile(req.params.slug, 'final.mp4')) }, spec, approved });
   } catch { res.status(404).json({ error: 'Проект не найден или ещё готовится.' }); }
 });
 app.put('/api/projects/:slug/spec', (req, res) => {
@@ -110,6 +128,11 @@ app.put('/api/projects/:slug/spec', (req, res) => {
   if (!spec || !Array.isArray(spec.parts) || !spec.parts.length) return res.status(400).json({ error: 'В спеке нет частей.' });
   const path = projectFile(req.params.slug, 'sb-spec.json');
   if (!existsSync(dirname(path))) return res.status(404).json({ error: 'Проект не найден.' });
+  const original = JSON.parse(readFileSync(path, 'utf8'));
+  for (const key of ['slug', 'prefix', 'outDir', 'framesDir', 'srcDir']) {
+    if (spec[key] !== original[key]) return res.status(400).json({ error: `Поле ${key} менять нельзя. Редактируйте описания кадров.` });
+  }
+  if (JSON.stringify(spec.parts.map(p => p.n)) !== JSON.stringify(original.parts.map(p => p.n))) return res.status(400).json({ error: 'Нумерацию частей менять нельзя.' });
   writeFileSync(path, JSON.stringify(spec, null, 2), 'utf8');
   res.json({ ok: true });
 });
@@ -121,6 +144,44 @@ app.post('/api/actions/chatgpt', (_req, res) => {
 app.post('/api/actions/flow', (_req, res) => {
   const job = startJob('Запуск Google Flow', process.execPath, [join(ROOT, 'scripts', 'flow-launch.mjs')]);
   res.status(202).json({ job });
+});
+app.post('/api/actions/flow-diagnose', (_req, res) => {
+  res.status(202).json({ job: startJob('Диагностика Flow — без генерации', process.execPath, [join(ROOT, 'scripts', 'flow-diagnose.mjs')]) });
+});
+app.get('/api/flow-diagnostic', (_req, res) => {
+  const path = join(REELS, '_qa', 'flow-diagnostic.json');
+  if (!existsSync(path)) return res.status(404).json({ error: 'Сначала запустите диагностику.' });
+  res.download(path, 'flow-diagnostic.json');
+});
+app.post('/api/projects/:slug/approved/:n', upload.single('video'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Выберите видео со звуком.' });
+  const project = JSON.parse(readFileSync(projectFile(req.params.slug, 'project.json'), 'utf8'));
+  const part = validateProject(project).find(p => String(p.n) === req.params.n);
+  if (!part) return res.status(400).json({ error: 'Такой части нет.' });
+  const media = probe(req.file.path);
+  validatePart(media, part.duration);
+  const sha256 = await digest(req.file.path);
+  const dir = projectFile(req.params.slug, 'approved');
+  mkdirSync(dir, { recursive: true });
+  const file = `part-${part.n}-${randomUUID()}.mp4`;
+  renameSync(req.file.path, join(dir, file));
+  const path = projectFile(req.params.slug, 'approved-parts.json');
+  const manifest = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  manifest[part.n] = { file, originalName: req.file.originalname, sha256, ...media };
+  writeFileSync(path, JSON.stringify(manifest, null, 2));
+  res.json({ ok: true, part: manifest[part.n] });
+});
+app.get('/api/projects/:slug/approved/:n', (req, res) => {
+  const path = projectFile(req.params.slug, 'approved-parts.json');
+  if (!existsSync(path)) return res.status(404).end();
+  const entry = JSON.parse(readFileSync(path, 'utf8'))[req.params.n];
+  if (!entry || !/^part-\d+-[a-f0-9-]+\.mp4$/.test(entry.file)) return res.status(404).end();
+  res.sendFile(projectFile(req.params.slug, join('approved', entry.file)));
+});
+app.post('/api/projects/:slug/assemble-approved', (req, res) => {
+  if (req.body?.reviewed !== true) return res.status(400).json({ error: 'Сначала просмотрите части и подтвердите порядок и речь.' });
+  res.status(202).json({ job: startJob('Сборка выбранных частей — без Flow', process.execPath,
+    [join(ROOT, 'scripts', 'assemble-approved.mjs'), dirname(projectFile(req.params.slug, 'project.json'))]) });
 });
 app.post('/api/projects/:slug/storyboards', (req, res) => {
   const spec = projectFile(req.params.slug, 'sb-spec.json');
@@ -148,13 +209,13 @@ app.get('/api/projects/:slug/final', (req, res) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
-  res.status(500).json({ error: error.message || 'Ошибка локального движка.' });
+  res.status(error.status || 500).json({ error: error.message || 'Ошибка локального движка.' });
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`\nReels Studio запущен: http://127.0.0.1:${PORT}`);
+const server = app.listen(PORT, '127.0.0.1', () => {
+  console.log(`\nReels Studio запущен: http://127.0.0.1:${server.address().port}`);
   console.log('Не закрывайте это окно во время монтажа.');
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' && !process.env.REELS_NO_OPEN) {
     spawn('cmd', ['/c', 'start', '', PAGES_URL], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   }
 });

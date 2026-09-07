@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromium } from '@playwright/test';
+import { selectProject, projectURL } from './flow-evidence.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const specPath = resolve(process.argv[2] || '');
@@ -28,6 +30,10 @@ function run(script, args = []) {
 }
 
 console.log(`\n=== ${spec.slug}: подготовка ${count} частей ===`);
+const browser = await chromium.connectOverCDP(process.env.FLOW_CDP || 'http://127.0.0.1:9223');
+const flowPage = selectProject(browser.contexts().flatMap(c => c.pages()));
+process.env.FLOW_PROJECT_URL = projectURL(flowPage.url());
+console.log('Экспериментальная очередь. Автоматического скачивания и сборки по времени нет.');
 await run('omni-prompt.mjs', [specPath]);
 await run('flow-prep-uploads.mjs', [join(projectDir, 'parts'), prefix, uploadDir]);
 
@@ -59,10 +65,5 @@ const after = new Date(Date.now() - 30_000).toISOString();
 writeFileSync(join(projectDir, 'flow-started-at.txt'), after, 'utf8');
 await run('flow-omni-queue.mjs', [prefix, join(projectDir, 'storyboard'), '1', String(count)]);
 
-for (let n = 1; n <= count; n++) {
-  const skip = count - n;
-  await run('flow-dl-omni.mjs', [join(omniDir, `${prefix}${n}-omni.mp4`), '--after', after, '--skip', String(skip)]);
-}
-
-await run('omni-assemble.mjs', [omniDir, join(projectDir, 'parts'), prefix, join(projectDir, 'final.mp4'), '--no-badge']);
-console.log(`\nГОТОВО: ${join(projectDir, 'final.mp4')}`);
+console.log('\nОчередь завершена, финальный MP4 ещё НЕ собран. Скачайте результаты Flow и выберите их по номерам в разделе «Готовые части из Flow → MP4».');
+process.exit(0);

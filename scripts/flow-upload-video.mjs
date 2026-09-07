@@ -23,6 +23,7 @@ import { chromium } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { acceptsFile, readyAsset, selectProject, readAssetRows } from './flow-evidence.mjs';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/flow-upload-video.mjs "<abs path .mp4>"'); process.exit(2); }
@@ -37,26 +38,14 @@ const QA = path.join(ROOT, 'workspace', 'reels', '_qa');
 mkdirSync(QA, { recursive: true });
 
 const b = await chromium.connectOverCDP(process.env.FLOW_CDP || 'http://127.0.0.1:9223');
-const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
-const ctx = b.contexts()[0];
-let p = ctx.pages().find(x => isFlowProject(x.url()));
+const p = selectProject(b.contexts().flatMap(c => c.pages()));
 if (!p) { console.error('НЕТ вкладки проекта Flow (ожидается flow.google.com/project/...)'); process.exit(9); }
 await p.bringToFront();
 console.log(`file: ${ABS} (${sizeMB} MB)`);
 
 async function reconnectPage() {
-  if (p && !p.isClosed()) return true;
-  await wait(1200);
-  try {
-    const next = ctx.pages().find(x => isFlowProject(x.url()));
-    if (!next) return false;
-    p = next;
-    await p.bringToFront();
-    console.log('вкладка Flow перезагрузилась — подключился заново');
-    return true;
-  } catch {
-    return false;
-  }
+  // Never silently switch to a different project or lose response listeners.
+  return b.isConnected() && !p.isClosed();
 }
 
 // ── сеть: отделяем настоящие upload-эндпоинты от телеметрии ─────────────────
@@ -74,6 +63,7 @@ let chooserHandled = false;
 let method = '';
 p.on('filechooser', async fc => {
   try {
+    if (!acceptsFile(await fc.element().getAttribute('accept') || '', BASE)) throw new Error('Это поле принимает другой тип файла.');
     await fc.setFiles(ABS);
     chooserHandled = true;
     method = 'filechooser';
@@ -93,7 +83,7 @@ async function setExistingFileInput(stage) {
   for (let i = 0; i < n; i++) {
     const accept = (await loc.nth(i).getAttribute('accept')) || '';
     accepts.push(accept);
-    if (!accept || /\*/.test(accept) || (wantsVideo ? /video/i.test(accept) : /image/i.test(accept))) candidates.push(i);
+    if (acceptsFile(accept, BASE)) candidates.push(i);
   }
   console.log(`${stage}: file inputs =`, JSON.stringify(accepts));
   for (const i of candidates.reverse()) {
@@ -145,25 +135,16 @@ async function dropOnWorkspace() {
 
 // ── снапшот строк пикера (имя + Image/Video) для диффа ──────────────────────
 async function pickerRows() {
-  return p.evaluate(() => {
-    const rows = [];
-    for (const e of document.querySelectorAll('div,li')) {
-      const r = e.getBoundingClientRect();
-      if (r.width < 200 || r.width > 780 || r.height < 40 || r.height > 110) continue;
-      if (r.x > innerWidth * 0.62) continue;
-      const t = (e.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!/(Image|Video|Изображение|Видео)$/.test(t)) continue;
-      rows.push({ t: t.slice(0, 46), y: Math.round(r.y) });
-    }
-    const out = [];
-    for (const row of rows.sort((a, b) => a.y - b.y)) if (!out.some(o => Math.abs(o.y - row.y) < 14)) out.push(row);
-    return out.map(o => o.t);
-  });
+  return readAssetRows(p);
 }
 async function scrollListTop() { await p.mouse.move(790, 400); await p.mouse.wheel(0, -2500); await wait(400); }
 
 await p.keyboard.press('Escape'); await wait(600);
-let before = [];
+let before = await pickerRows();
+if (before.some(row => readyAsset(row, BASE))) {
+  console.log(`ALREADY UPLOADED: ${BASE} (готовая строка с именем)`);
+  process.exit(0);
+}
 
 // 1) Новый Flow часто держит подходящий input прямо на странице.
 let uploadStarted = await setExistingFileInput('initial');
@@ -191,7 +172,7 @@ if (!uploadStarted) {
 
     // Повторный запуск после частичного сбоя: проверяем конкретное имя, а не
     // количество строк. Flow может показать один и тот же ассет дважды.
-    const alreadyUploaded = before.some(row => row.toLowerCase().includes(NOEXT.toLowerCase()));
+    const alreadyUploaded = before.some(row => readyAsset(row, BASE));
     if (alreadyUploaded) {
       console.log(`ALREADY UPLOADED: ${NOEXT} (найдено точное имя)`);
       process.exit(0);
@@ -250,10 +231,11 @@ for (let t = 0; t < 30 && !ok; t++) {
   await scrollListTop();
   const now = await pickerRows();
   newRows = now.filter(s => !before.includes(s));
-  nameSeen = await p.evaluate(nx => (document.body.innerText || '').includes(nx), NOEXT).catch(() => false);
+  nameSeen = now.some(row => readyAsset(row, BASE));
   const up2xx = netUpload.filter(x => x.st >= 200 && x.st < 300 && /POST|PUT/.test(x.m));
   process.stdout.write(`  poll ${String(t).padStart(2)}: newRows=${newRows.length} name(${NOEXT})=${nameSeen} netUpload=${netUpload.length} 2xx-POST/PUT=${up2xx.length}\n`);
-  if (newRows.length > 0 || nameSeen || up2xx.length > 0) ok = true;
+  // A 2xx may only start a resumable upload. A search echo or another row isn't proof.
+  if (nameSeen) ok = true;
 }
 
 await reconnectPage();

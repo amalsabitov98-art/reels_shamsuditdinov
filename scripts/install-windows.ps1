@@ -1,3 +1,4 @@
+# ASCII messages intentionally work in Windows PowerShell 5 without a UTF-8 BOM.
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
@@ -6,37 +7,40 @@ function Has-Command([string]$Name) {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-function Install-Package([string]$Id, [string]$Title) {
-  Write-Host "Устанавливаю $Title..." -ForegroundColor Cyan
-  winget install --id $Id --exact --accept-package-agreements --accept-source-agreements
+function Run-Native([string]$Command, [string[]]$Arguments) {
+  & $Command @Arguments
+  if ($LASTEXITCODE -ne 0) { throw "$Command failed with exit code $LASTEXITCODE. Installation is NOT complete." }
 }
-
-if (-not (Has-Command "winget")) {
-  throw "Не найден winget. Обновите 'Установщик приложений' в Microsoft Store и повторите."
+function Install-Package([string]$Id, [string]$Title) {
+  if (-not (Has-Command "winget")) { throw "Install App Installer from Microsoft Store, then run INSTALL.bat again." }
+  Write-Host "Installing $Title..."
+  Run-Native "winget" @("install", "--id", $Id, "--exact", "--accept-package-agreements", "--accept-source-agreements")
 }
 if (-not (Has-Command "node")) { Install-Package "OpenJS.NodeJS.LTS" "Node.js" }
 if (-not (Has-Command "python")) { Install-Package "Python.Python.3.12" "Python 3.12" }
 if (-not (Has-Command "ffmpeg")) { Install-Package "Gyan.FFmpeg" "FFmpeg" }
 
-$Chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-if (-not (Test-Path $Chrome)) { Install-Package "Google.Chrome" "Google Chrome" }
+$ChromePaths = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe", "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")
+if (-not ($ChromePaths | Where-Object { Test-Path $_ })) { Install-Package "Google.Chrome" "Google Chrome" }
 
 $MachinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $env:Path = "$MachinePath;$UserPath"
 
 if (-not (Has-Command "node") -or -not (Has-Command "python") -or -not (Has-Command "ffmpeg")) {
-  Write-Host "Программы установлены. Закройте это окно и запустите INSTALL.bat ещё раз." -ForegroundColor Yellow
-  exit 0
+  Write-Host "Close this window and run INSTALL.bat again to refresh installed tools." -ForegroundColor Yellow
+  exit 1
 }
 
-Write-Host "Устанавливаю локальные зависимости проекта..." -ForegroundColor Cyan
-& npm install
+Write-Host "Installing project dependencies..." -ForegroundColor Cyan
+Run-Native "node" @("-e", "if(Number(process.versions.node.split('.')[0])<20)process.exit(1)")
+Run-Native "python" @("--version")
+Run-Native "npm.cmd" @("ci")
 
 if (-not (Test-Path ".venv\Scripts\python.exe")) {
-  & python -m venv .venv
+  Run-Native "python" @("-m", "venv", ".venv")
 }
-& ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
+Run-Native ".venv\Scripts\python.exe" @("-m", "pip", "install", "--disable-pip-version-check", "-r", "requirements.txt")
 
 Write-Host ""
-Write-Host "Установка завершена. Теперь запускайте START.bat." -ForegroundColor Green
+Write-Host "Installation completed. Run START.bat." -ForegroundColor Green

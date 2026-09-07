@@ -17,8 +17,8 @@
     <section class="hero">
       <div class="eyebrow">ЛОКАЛЬНЫЙ AI-МОНТАЖ</div>
       <h1>Из говорящего видео<br><em>в готовый Reels.</em></h1>
-      <p>Загружаете исходник здесь. Ваш компьютер режет видео по фразам, ChatGPT создаёт раскадровку, Google Flow монтирует, а студия собирает финальный MP4.</p>
-      <div class="hero-meta"><span>Без отдельного компьютера</span><span>Без платного сервера</span><span>Файлы остаются у вас</span></div>
+      <p>Компьютер подготавливает видео. ChatGPT и Flow помогают создать монтаж. Выберите готовые части из Flow — студия проверит комплект и соберёт MP4. Браузерная автоматизация пока экспериментальная.</p>
+      <div class="hero-meta"><span>Без отдельного компьютера</span><span>Без платного сервера</span><span>AI-обработка отправляет материалы в ChatGPT и Flow</span></div>
     </section>
 
     <section class="notice" id="offlineNotice">
@@ -63,9 +63,19 @@
       <div class="pipeline">
         <div class="pipeline-item"><span>1</span><h3>ChatGPT</h3><p>Откроется отдельное окно Chrome. Войдите в свой аккаунт.</p><button class="secondary" data-action="chatgpt">Открыть ChatGPT</button></div>
         <div class="pipeline-item"><span>2</span><h3>Сториборды</h3><p>Студия создаст шесть кадров для каждой части.</p><button class="secondary project-action" data-action="storyboards">Создать сториборды</button></div>
-        <div class="pipeline-item"><span>3</span><h3>Google Flow</h3><p>Войдите и создайте пустой проект, чтобы адрес содержал <b>/flow/project/</b>.</p><button class="secondary" data-action="flow-open">Открыть Flow</button></div>
-        <div class="pipeline-item accent"><span>4</span><h3>Монтаж</h3><p>Загрузка, очередь, скачивание частей и сборка финала.</p><button class="primary project-action" data-action="flow-run">Собрать ролик</button></div>
+        <div class="pipeline-item"><span>3</span><h3>Google Flow</h3><p>Войдите в проект в отдельном Chrome. Оставьте открытым только один проект Flow.</p><button class="secondary" data-action="flow-open">Открыть Flow</button></div>
+        <div class="pipeline-item accent"><span>4</span><h3>Проверка Flow</h3><p>Без загрузок, отправки запросов и расхода кредитов. Отчёт может содержать названия файлов.</p><button class="primary" data-action="flow-diagnose">Диагностика Flow</button><p><a id="downloadDiagnostic" href="#">Скачать отчёт</a></p></div>
       </div>
+      <details><summary>Экспериментальная автоматизация Flow</summary><p>Может расходовать кредиты. Новый режим «Агент» не проверен. При неизвестном режиме скрипт остановится. Автоскачивание по времени отключено: результаты нужно выбрать по частям ниже.</p><button class="secondary project-action" data-action="flow-run">Запустить экспериментальную очередь</button></details>
+    </section>
+
+    <section class="card">
+      <div class="step">СБОРКА БЕЗ УПРАВЛЕНИЯ БРАУЗЕРОМ</div>
+      <h2>Готовые части из Flow → MP4</h2>
+      <p class="muted">Скачайте результат каждой части из Flow и выберите его напротив соответствующего номера. Не исходники и не картинки-раскадровки. Предпросмотр поможет проверить порядок. Звук Flow сохраняется, речь автоматически не исправляется.</p>
+      <div id="approvedParts">Выберите подготовленный проект.</div>
+      <label><input type="checkbox" id="reviewedParts"> Я просмотрел все выбранные части: порядок и речь правильные.</label>
+      <p><button class="primary project-action" id="assembleApproved">Собрать выбранные части</button></p>
     </section>
 
     <section class="grid lower">
@@ -79,7 +89,7 @@
         <h2>Результат</h2>
         <div class="result-placeholder" id="resultPlaceholder"><span>▶</span><p>Финальный ролик появится после монтажа.</p></div>
         <div class="result-actions">
-          <button class="secondary project-action" data-action="verify">Проверить речь</button>
+          <button class="secondary project-action" data-action="verify">Расшифровать речь для сверки</button>
           <a id="downloadFinal" class="primary disabled" href="#">Скачать MP4</a>
         </div>
       </article>
@@ -91,7 +101,7 @@
     </section>
   </main>
 
-  <footer>REELS STUDIO · файлы обрабатываются локально на вашем компьютере</footer>
-  <script src="app.js"></script>
+  <footer>REELS STUDIO 1.1 · подготовка и сборка локальные; генерация — в сторонних AI-сервисах</footer>
+  <script src="app.js?v=1.1.0"></script>
 </body>
 </html>

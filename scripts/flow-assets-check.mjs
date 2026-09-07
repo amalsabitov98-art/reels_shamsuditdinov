@@ -7,12 +7,12 @@
  * Usage: node scripts/flow-assets-check.mjs lv1-board lv1-snd ...
  */
 import { chromium } from '@playwright/test';
+import { readyAsset, selectProject, readAssetRows } from './flow-evidence.mjs';
 
 const names = process.argv.slice(2);
 if (!names.length) { console.error('usage: node scripts/flow-assets-check.mjs <name...>'); process.exit(2); }
 const b = await chromium.connectOverCDP(process.env.FLOW_CDP || 'http://127.0.0.1:9223');
-const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
-const p = b.contexts()[0].pages().find(x => isFlowProject(x.url()));
+const p = selectProject(b.contexts().flatMap(c => c.pages()));
 if (!p) { console.error('нет вкладки Flow'); process.exit(1); }
 await p.bringToFront();
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -22,6 +22,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 for (let i = 0; i < 60; i++) {
   const busy = await p.evaluate(() => /Загрузка…|Uploading…|Uploading|Обработка…|Processing…/i.test(document.body.innerText || ''));
   if (!busy) break;
+  if (i === 59) throw new Error('Обработка ассетов не завершилась. Генерация не запускается.');
   if (i % 5 === 0) console.log('  жду завершения загрузки ассетов…');
   await wait(2000);
 }
@@ -60,10 +61,7 @@ for (const n of names) {
   await p.mouse.click(box.x, box.y); await wait(300);
   await p.keyboard.press('Control+A'); await p.keyboard.press('Delete');
   await p.keyboard.insertText(n); await wait(2400);
-  const found = await p.evaluate((nx) => {
-    const t = document.body.innerText;
-    return t.includes(nx);
-  }, n);
+  const found = (await readAssetRows(p)).some(row => readyAsset(row, n));
   console.log(`  ${found ? '✅' : '❌'} ${n}`);
   if (!found) missing.push(n);
 }
