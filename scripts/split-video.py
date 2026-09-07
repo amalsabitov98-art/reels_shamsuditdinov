@@ -12,6 +12,16 @@ import sys
 from pathlib import Path
 
 
+# Windows may default redirected Python output to cp1251.  The local helper reads
+# subprocess logs as UTF-8, so make the encoding explicit and never crash merely
+# because a log message contains a character outside the active console codepage.
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+
 ROOT = Path(__file__).resolve().parents[1]
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
@@ -28,7 +38,7 @@ def safe_name(value: str, fallback: str) -> str:
 
 
 def run(args: list[str]) -> None:
-    print("▶", " ".join(args))
+    print("RUN:", " ".join(args))
     subprocess.run(args, check=True)
 
 
