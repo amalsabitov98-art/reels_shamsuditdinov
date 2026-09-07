@@ -86,8 +86,14 @@ async function ensureIngredients() {
 async function openPicker() {
   await p.keyboard.press('Escape'); await wait(400);
   const plus = await p.evaluate(() => {
-    const e = [...document.querySelectorAll('button')]
-      .find(x => /add_2/i.test(x.textContent || '') && x.getBoundingClientRect().y > innerHeight * 0.7);
+    const e = [...document.querySelectorAll('button,[role="button"]')]
+      .find(x => {
+        const text = (x.textContent || '').trim();
+        const label = `${x.getAttribute('aria-label') || ''} ${x.getAttribute('title') || ''}`;
+        const r = x.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.y > innerHeight * 0.65
+          && (/add_2|^add$|^\+$/i.test(text) || /add media|upload|добав|загруз/i.test(label));
+      });
     if (!e) return null;
     const r = e.getBoundingClientRect();
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
