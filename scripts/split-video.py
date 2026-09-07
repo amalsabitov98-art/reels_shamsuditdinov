@@ -101,7 +101,9 @@ def build_spec(slug: str, prefix: str, project_dir: Path, parts: list[dict], wor
         length = part["end"] - part["start"]
         panels = []
         for index in range(6):
-            at = min(max(0.15, length * index / 5), max(0.15, length - 0.12))
+            # Leave enough room before the physical end of the video stream.
+            # Container/audio duration may be a few frames longer than video.
+            at = min(max(0.15, length * index / 5), max(0.15, length - 0.45))
             absolute = part["start"] + at
             head = phrase(words, absolute - 0.7, absolute + 1.25)
             panels.append({

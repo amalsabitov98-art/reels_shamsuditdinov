@@ -33,7 +33,7 @@
  * `at` — только для нарезки кадров, в промпт не попадает как «5.5s», а идёт через `timing`.
  */
 import { chromium } from '@playwright/test';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { execSync } from 'child_process';
 
@@ -71,6 +71,35 @@ function buildPrompt(part, total, panels) {
   const body = panels.map((p, i) =>
     `PANEL ${NUM[i]}. Shot type ${p.shot}. Timing ${p.timing}. ${p.desc}`).join('\n\n');
   return `${HEAD(part, total)}\n\n${body}\n\nAll Russian text must be spelled correctly and be fully legible. Keep captions short.\n`;
+}
+
+function validFrame(path) {
+  try { return existsSync(path) && statSync(path).size >= 1000; }
+  catch { return false; }
+}
+
+function extractFrame(video, requestedAt, out) {
+  if (validFrame(out)) return;
+  // У коротких MP4 аудио нередко длиннее видеоряда на 0.1–0.3 секунды. Поэтому
+  // таймкод у самого края может дать ffmpeg exit=0, но не создать ни одного JPEG.
+  // В таком случае отступаем назад и обязательно проверяем реальный файл.
+  const attempts = [requestedAt, requestedAt - 0.35, requestedAt - 0.8]
+    .map(x => Math.max(0.1, Number(x.toFixed(3))))
+    .filter((x, i, all) => all.indexOf(x) === i);
+  let lastError = null;
+  for (const at of attempts) {
+    rmSync(out, { force: true });
+    try {
+      execSync(`"${FFMPEG}" -y -ss ${at} -i "${video}" -frames:v 1 -q:v 2 -strict unofficial -loglevel error "${out}"`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (validFrame(out)) {
+      if (at !== requestedAt) console.log(`    ↩ кадр ${requestedAt}с взят с ${at}с (конец видеоряда)`);
+      return;
+    }
+  }
+  throw new Error(`не удалось извлечь кадр около ${requestedAt}с из ${video}${lastError ? `: ${lastError.message}` : ''}`);
 }
 
 // ─── helpers CDP (те же, что в f2-from-ref.mjs) ──────────────────────────────
@@ -167,11 +196,7 @@ for (const part of spec.parts) {
   const framePaths = [];
   for (const [i, p] of part.panels.entries()) {
     const f = join(framesDir, `p${part.n}-${i + 1}.jpg`);
-    if (!existsSync(f) || statSync(f).size < 1000) {
-      // FFmpeg 9 rejects MJPEG from limited-range YUV unless unofficial
-      // compliance is explicitly permitted. Older versions accept this too.
-      execSync(`"${FFMPEG}" -y -ss ${p.at} -i "${partVideo}" -frames:v 1 -q:v 2 -strict unofficial -loglevel error "${f}"`);
-    }
+    extractFrame(partVideo, p.at, f);
     framePaths.push(f);
   }
 
