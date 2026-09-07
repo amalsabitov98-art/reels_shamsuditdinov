@@ -33,7 +33,7 @@
  * `at` — только для нарезки кадров, в промпт не попадает как «5.5s», а идёт через `timing`.
  */
 import { chromium } from '@playwright/test';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { execSync } from 'child_process';
 
@@ -167,8 +167,10 @@ for (const part of spec.parts) {
   const framePaths = [];
   for (const [i, p] of part.panels.entries()) {
     const f = join(framesDir, `p${part.n}-${i + 1}.jpg`);
-    if (!existsSync(f)) {
-      execSync(`"${FFMPEG}" -y -ss ${p.at} -i "${partVideo}" -frames:v 1 -q:v 2 -loglevel error "${f}"`);
+    if (!existsSync(f) || statSync(f).size < 1000) {
+      // FFmpeg 9 rejects MJPEG from limited-range YUV unless unofficial
+      // compliance is explicitly permitted. Older versions accept this too.
+      execSync(`"${FFMPEG}" -y -ss ${p.at} -i "${partVideo}" -frames:v 1 -q:v 2 -strict unofficial -loglevel error "${f}"`);
     }
     framePaths.push(f);
   }
