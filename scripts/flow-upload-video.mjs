@@ -44,7 +44,7 @@ await p.bringToFront();
 console.log(`file: ${ABS} (${sizeMB} MB)`);
 
 // ── сеть: отделяем настоящие upload-эндпоинты от телеметрии ─────────────────
-const TELEMETRY = /batchLogFrontendEvents|fetchUserAcknowledgement|credits|clientstreamz|gstatic|fonts|\.css|\.js(\?|$)/i;
+const TELEMETRY = /batchLogFrontendEvents|fetchUserAcknowledgement|credits|clientstreamz|google-analytics|\/g\/collect|gstatic|fonts|\.css|\.js(\?|$)/i;
 const UPLOADISH = /upload|scotty|resumable|blobstore|media\.(create|upload)|uploads\b/i;
 const netUpload = [];
 p.on('response', r => {
@@ -171,7 +171,20 @@ if (!uploadStarted) {
     await p.mouse.click(plus.x, plus.y); await wait(1800);
     await scrollListTop();
     before = await pickerRows();
-    console.log('picker rows before:', before.length);
+    console.log('picker rows before:', before.length, JSON.stringify(before));
+
+    // Повторный запуск после частичного сбоя: ассеты загружаются строго парами
+    // board/snd для каждой части. Если нужный порядковый слот уже присутствует,
+    // Flow проигнорирует тот же файл как дубль — поэтому сразу считаем его готовым.
+    const slot = NOEXT.match(/(\d+)-(board|snd)$/i);
+    if (slot) {
+      const part = Number(slot[1]);
+      const requiredRows = (part - 1) * 2 + (/snd$/i.test(slot[2]) ? 2 : 1);
+      if (before.length >= requiredRows) {
+        console.log(`ALREADY UPLOADED: ${NOEXT} (слот ${requiredRows}, в проекте ${before.length})`);
+        process.exit(0);
+      }
+    }
     uploadStarted = chooserHandled || await setExistingFileInput('after +');
   } else {
     console.log('composer + не найден, пробую drag-and-drop');

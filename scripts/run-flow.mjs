@@ -31,6 +31,17 @@ console.log(`\n=== ${spec.slug}: подготовка ${count} частей ===`
 await run('omni-prompt.mjs', [specPath]);
 await run('flow-prep-uploads.mjs', [join(projectDir, 'parts'), prefix, uploadDir]);
 
+// Проверяем комплект до первой загрузки. Иначе при отсутствующей поздней картинке
+// ранние ассеты уже попадают в Flow, а повторный запуск упирается в дубликаты.
+const missingBoards = [];
+for (let n = 1; n <= count; n++) {
+  const boardSource = join(projectDir, 'storyboard', `p${n}-board.png`);
+  if (!existsSync(boardSource)) missingBoards.push(boardSource);
+}
+if (missingBoards.length) {
+  throw new Error(`не хватает раскадровок:\n${missingBoards.join('\n')}\nСначала нажмите «Создать сториборды».`);
+}
+
 const names = [];
 for (let n = 1; n <= count; n++) {
   const boardSource = join(projectDir, 'storyboard', `p${n}-board.png`);
