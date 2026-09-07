@@ -38,10 +38,26 @@ mkdirSync(QA, { recursive: true });
 
 const b = await chromium.connectOverCDP(process.env.FLOW_CDP || 'http://127.0.0.1:9223');
 const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
-const p = b.contexts()[0].pages().find(x => isFlowProject(x.url()));
+const ctx = b.contexts()[0];
+let p = ctx.pages().find(x => isFlowProject(x.url()));
 if (!p) { console.error('НЕТ вкладки проекта Flow (ожидается flow.google.com/project/...)'); process.exit(9); }
 await p.bringToFront();
 console.log(`file: ${ABS} (${sizeMB} MB)`);
+
+async function reconnectPage() {
+  if (p && !p.isClosed()) return true;
+  await wait(1200);
+  try {
+    const next = ctx.pages().find(x => isFlowProject(x.url()));
+    if (!next) return false;
+    p = next;
+    await p.bringToFront();
+    console.log('вкладка Flow перезагрузилась — подключился заново');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ── сеть: отделяем настоящие upload-эндпоинты от телеметрии ─────────────────
 const TELEMETRY = /batchLogFrontendEvents|fetchUserAcknowledgement|credits|clientstreamz|google-analytics|\/g\/collect|gstatic|fonts|\.css|\.js(\?|$)/i;
@@ -173,17 +189,12 @@ if (!uploadStarted) {
     before = await pickerRows();
     console.log('picker rows before:', before.length, JSON.stringify(before));
 
-    // Повторный запуск после частичного сбоя: ассеты загружаются строго парами
-    // board/snd для каждой части. Если нужный порядковый слот уже присутствует,
-    // Flow проигнорирует тот же файл как дубль — поэтому сразу считаем его готовым.
-    const slot = NOEXT.match(/(\d+)-(board|snd)$/i);
-    if (slot) {
-      const part = Number(slot[1]);
-      const requiredRows = (part - 1) * 2 + (/snd$/i.test(slot[2]) ? 2 : 1);
-      if (before.length >= requiredRows) {
-        console.log(`ALREADY UPLOADED: ${NOEXT} (слот ${requiredRows}, в проекте ${before.length})`);
-        process.exit(0);
-      }
+    // Повторный запуск после частичного сбоя: проверяем конкретное имя, а не
+    // количество строк. Flow может показать один и тот же ассет дважды.
+    const alreadyUploaded = before.some(row => row.toLowerCase().includes(NOEXT.toLowerCase()));
+    if (alreadyUploaded) {
+      console.log(`ALREADY UPLOADED: ${NOEXT} (найдено точное имя)`);
+      process.exit(0);
     }
     uploadStarted = chooserHandled || await setExistingFileInput('after +');
   } else {
@@ -222,12 +233,20 @@ if (!uploadStarted) {
   process.exit(5);
 }
 await wait(1500);
-await p.screenshot({ path: QA + '/upvid-after-set.png' });
+if (!(await reconnectPage())) {
+  console.error('Вкладка проекта Flow закрылась во время загрузки. Откройте проект и повторите запуск.');
+  process.exit(6);
+}
+await p.screenshot({ path: QA + '/upvid-after-set.png' }).catch(e => console.log('screenshot skipped:', e.message.split('\n')[0]));
 
 // 4) ждём обработку/транскод; поллим появление новой строки в пикере (Recent → сверху)
 let newRows = [], ok = false, nameSeen = false;
 for (let t = 0; t < 30 && !ok; t++) {
   await wait(4000);
+  if (!(await reconnectPage())) {
+    console.log(`  poll ${String(t).padStart(2)}: вкладка Flow пока недоступна`);
+    continue;
+  }
   await scrollListTop();
   const now = await pickerRows();
   newRows = now.filter(s => !before.includes(s));
@@ -237,7 +256,8 @@ for (let t = 0; t < 30 && !ok; t++) {
   if (newRows.length > 0 || nameSeen || up2xx.length > 0) ok = true;
 }
 
-await p.screenshot({ path: QA + '/upvid-final.png' });
+await reconnectPage();
+if (p && !p.isClosed()) await p.screenshot({ path: QA + '/upvid-final.png' }).catch(e => console.log('final screenshot skipped:', e.message.split('\n')[0]));
 console.log('\n──────── RESULT ────────');
 console.log('method      :', method);
 console.log('new rows    :', newRows.length, newRows.slice(0, 8));
