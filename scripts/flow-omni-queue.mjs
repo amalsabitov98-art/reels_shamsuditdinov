@@ -31,7 +31,8 @@ const CDP = process.env.FLOW_CDP || 'http://127.0.0.1:9223';
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
 const b = await chromium.connectOverCDP(CDP);
-const p = b.contexts()[0].pages().find(x => /flow\/project/.test(x.url()));
+const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
+const p = b.contexts()[0].pages().find(x => isFlowProject(x.url()));
 if (!p) { console.error('НЕТ вкладки с проектом Flow'); process.exit(1); }
 await p.bringToFront();
 
@@ -72,7 +73,7 @@ async function ensureIngredients() {
   await p.mouse.click(chip.x, chip.y); await wait(1600);
   const hit = await p.evaluate(() => {
     const e = [...document.querySelectorAll('button,[role="button"]')]
-      .find(x => /^(chrome_extension)?Ingredients$|Malzemeler/.test((x.textContent || '').trim()));
+      .find(x => /^(chrome_extension)?Ingredients$|Malzemeler|Ингредиенты|Компоненты/.test((x.textContent || '').trim()));
     if (!e) return false;
     const r = e.getBoundingClientRect();
     e.click(); return true;
@@ -99,7 +100,7 @@ async function openPicker() {
 async function attach(name) {
   await openPicker();
   const box = await p.evaluate(() => {
-    const i = [...document.querySelectorAll('input')].find(x => /ara|search/i.test(x.placeholder || ''));
+    const i = [...document.querySelectorAll('input')].find(x => /ara|search|поиск|искать/i.test(x.placeholder || ''));
     if (!i) return null;
     const r = i.getBoundingClientRect();
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
@@ -110,7 +111,7 @@ async function attach(name) {
   const before = await chips();
   const btn = await p.evaluate(() => {
     const e = [...document.querySelectorAll('button')]
-      .find(x => /İsteme ekle|Add to Prompt/i.test((x.textContent || '').trim()));
+      .find(x => /İsteme ekle|Add to Prompt|Добавить (в запрос|в промпт)/i.test((x.textContent || '').trim()));
     if (!e) return null;
     const r = e.getBoundingClientRect();
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
@@ -166,7 +167,7 @@ async function waitDone(maxMin = 10) {
     // подписи бывают турецкие и английские — ловим оба языка
     const busy = await p.evaluate(() => {
       const t = document.body.innerText;
-      return /Oluşturuluyor|oluşturuluyor|Generating|generating/.test(t) || /\d{1,3}%/.test(t);
+      return /Oluşturuluyor|oluşturuluyor|Generating|generating|Созда[её]тся|Генерация|генерируется/i.test(t) || /\d{1,3}%/.test(t);
     });
     if (!busy) return true;
     await wait(12000);
@@ -179,7 +180,7 @@ async function waitDone(maxMin = 10) {
 // чтобы не принять пустой результат за успех.
 const policyHit = () => p.evaluate(() => {
   const t = document.body.innerText;
-  return /violate our policies|may violate|ihlal ed|politika/i.test(t);
+  return /violate our policies|may violate|ihlal ed|politika|наруш(ает|ение).*(правил|политик)/i.test(t);
 });
 
 let ok = 0, bad = 0, policy = 0;

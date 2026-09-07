@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // flow-launch.mjs
-// Поднимает Chrome с ОТДЕЛЬНЫМ профилем под Google Flow (labs.google/fx/tools/flow)
+// Поднимает Chrome с ОТДЕЛЬНЫМ профилем под Google Flow (flow.google.com)
 // на порту CDP 9223. Логинишься в Google ОДИН раз в открывшемся окне — дальше
 // профиль хранит сессию, и flow-generate.mjs подключается к этому же Chrome.
 //
@@ -22,7 +22,7 @@ const CHROME = [
 ].filter(Boolean).find(existsSync);
 const PROFILE = join(ROOT, 'auth', 'flow-profile');
 const PORT = 9223;
-const URL = 'https://labs.google/fx/tools/flow';
+const URL = 'https://flow.google.com';
 
 // Гео-настройка (файл необязательный, лежит вне git):
 //   scripts/.flow-geo.json → { "proxy": "socks5://host:port", "requireCountry": "US" }

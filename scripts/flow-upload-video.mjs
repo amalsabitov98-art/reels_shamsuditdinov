@@ -37,8 +37,9 @@ const QA = path.join(ROOT, 'workspace', 'reels', '_qa');
 mkdirSync(QA, { recursive: true });
 
 const b = await chromium.connectOverCDP(process.env.FLOW_CDP || 'http://127.0.0.1:9223');
-const p = b.contexts()[0].pages().find(x => /flow\/project/.test(x.url()));
-if (!p) { console.error('НЕТ вкладки flow/project'); process.exit(9); }
+const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
+const p = b.contexts()[0].pages().find(x => isFlowProject(x.url()));
+if (!p) { console.error('НЕТ вкладки проекта Flow (ожидается flow.google.com/project/...)'); process.exit(9); }
 await p.bringToFront();
 console.log(`file: ${ABS} (${sizeMB} MB)`);
 
@@ -68,7 +69,7 @@ async function pickerRows() {
       if (r.width < 200 || r.width > 780 || r.height < 40 || r.height > 110) continue;
       if (r.x > innerWidth * 0.62) continue;
       const t = (e.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!/(Image|Video)$/.test(t)) continue;
+      if (!/(Image|Video|Изображение|Видео)$/.test(t)) continue;
       rows.push({ t: t.slice(0, 46), y: Math.round(r.y) });
     }
     const out = [];
@@ -97,7 +98,7 @@ async function findUploadMedia() {
     const c = [...document.querySelectorAll('button,[role="button"]')].map(e => {
       const t = (e.textContent || '').replace(/\s+/g, ' ').trim(); const r = e.getBoundingClientRect();
       return { t, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), w: r.width, h: r.height };
-    }).filter(o => o.w > 0 && o.h > 0 && /Upload media|Medya yükle/i.test(o.t) && o.t.length < 30);
+    }).filter(o => o.w > 0 && o.h > 0 && /Upload media|Medya yükle|Загрузить (медиа|медиафайл)/i.test(o.t) && o.t.length < 40);
     c.sort((a, b) => a.w * a.h - b.w * b.h);
     return c[0] || null;
   });

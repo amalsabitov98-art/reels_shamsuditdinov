@@ -24,14 +24,18 @@ if (!OUT && !LIST) { console.error('usage: node scripts/flow-dl-omni.mjs <out.mp
 
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const b = await chromium.connectOverCDP(process.env.FLOW_CDP || 'http://127.0.0.1:9223');
-const p = b.contexts()[0].pages().find(x => /flow\/project/.test(x.url()));
+const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
+const p = b.contexts()[0].pages().find(x => isFlowProject(x.url()));
 if (!p) { console.error('нет вкладки Flow'); process.exit(1); }
 const PID = p.url().match(/project\/([0-9a-f-]+)/)?.[1];
 if (!PID) { console.error('не разобрал projectId из URL'); process.exit(1); }
+const API_BASE = p.url().startsWith('https://flow.google.com/')
+  ? 'https://flow.google.com/api/trpc'
+  : 'https://labs.google/fx/api/trpc';
 console.log('проект:', PID, '| свежее чем', AFTER);
 
 async function getMedia() {
-  const u = `https://labs.google/fx/api/trpc/flow.projectInitialData?input=${encodeURIComponent(JSON.stringify({ json: { projectId: PID } }))}`;
+  const u = `${API_BASE}/flow.projectInitialData?input=${encodeURIComponent(JSON.stringify({ json: { projectId: PID } }))}`;
   try {
     const resp = await p.request.get(u);
     if (!resp.ok()) return null;
@@ -59,7 +63,7 @@ for (let i = 0; i < 30; i++) {
   const st = m.mediaMetadata?.mediaStatus?.mediaGenerationStatus || '?';
   console.log(`  poll ${i}: ${st} ${m.mediaMetadata.createTime}`);
   if (st === 'MEDIA_GENERATION_STATUS_SUCCESSFUL') {
-    const resp = await p.request.get(`https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=${m.name}`);
+    const resp = await p.request.get(`${API_BASE}/media.getMediaUrlRedirect?name=${m.name}`);
     const body = await resp.body();
     if (body.length < 100000) { console.log(`  тело ${body.length} байт — мало, повтор`); await wait(12000); continue; }
     mkdirSync(dirname(OUT), { recursive: true });

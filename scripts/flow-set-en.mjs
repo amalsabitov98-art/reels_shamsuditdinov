@@ -14,7 +14,8 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
 const b = await chromium.connectOverCDP(CDP);
 const ctx = b.contexts()[0];
-const p = ctx.pages().find(x => /flow\/project/.test(x.url()));
+const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
+const p = ctx.pages().find(x => isFlowProject(x.url()));
 if (!p) { console.error('НЕТ вкладки с проектом Flow'); process.exit(1); }
 await p.bringToFront();
 

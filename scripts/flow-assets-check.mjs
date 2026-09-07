@@ -11,7 +11,8 @@ import { chromium } from '@playwright/test';
 const names = process.argv.slice(2);
 if (!names.length) { console.error('usage: node scripts/flow-assets-check.mjs <name...>'); process.exit(2); }
 const b = await chromium.connectOverCDP(process.env.FLOW_CDP || 'http://127.0.0.1:9223');
-const p = b.contexts()[0].pages().find(x => /flow\/project/.test(x.url()));
+const isFlowProject = url => /^https:\/\/(?:flow\.google\.com\/project\/|labs\.google\/fx\/tools\/flow\/project\/)/i.test(url);
+const p = b.contexts()[0].pages().find(x => isFlowProject(x.url()));
 if (!p) { console.error('нет вкладки Flow'); process.exit(1); }
 await p.bringToFront();
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -32,7 +33,7 @@ async function openPicker() {
 
 await openPicker();
 const box = await p.evaluate(() => {
-  const i = [...document.querySelectorAll('input')].find(x => /ara|search/i.test(x.placeholder || ''));
+  const i = [...document.querySelectorAll('input')].find(x => /ara|search|поиск|искать/i.test(x.placeholder || ''));
   if (!i) return null;
   const r = i.getBoundingClientRect();
   return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
