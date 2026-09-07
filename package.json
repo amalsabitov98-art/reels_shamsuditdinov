@@ -1,0 +1,20 @@
+{
+  "name": "reels-shamsuditdinov",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Локальный движок и GitHub Pages интерфейс для Reels-конвейера",
+  "scripts": {
+    "start": "node scripts/helper-server.mjs",
+    "check": "node scripts/check-system.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.61.0",
+    "express": "^5.1.0",
+    "multer": "^2.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

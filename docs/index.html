@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#090909">
+  <title>Reels Studio</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#"><span class="brand-mark">R</span><span>REELS STUDIO</span></a>
+    <div id="engineStatus" class="status offline"><span></span>Движок не подключён</div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="eyebrow">ЛОКАЛЬНЫЙ AI-МОНТАЖ</div>
+      <h1>Из говорящего видео<br><em>в готовый Reels.</em></h1>
+      <p>Загружаете исходник здесь. Ваш компьютер режет видео по фразам, ChatGPT создаёт раскадровку, Google Flow монтирует, а студия собирает финальный MP4.</p>
+      <div class="hero-meta"><span>Без отдельного компьютера</span><span>Без платного сервера</span><span>Файлы остаются у вас</span></div>
+    </section>
+
+    <section class="notice" id="offlineNotice">
+      <div><strong>Сначала запустите локальный движок</strong><br>На компьютере откройте папку проекта и дважды нажмите <b>START.bat</b>.</div>
+      <button class="ghost" id="retryButton">Проверить ещё раз</button>
+    </section>
+
+    <section class="grid">
+      <article class="card upload-card">
+        <div class="step">01</div>
+        <h2>Новый ролик</h2>
+        <p class="muted">MP4, MOV или WEBM. Лучше вертикальное видео до 60 секунд.</p>
+        <form id="uploadForm">
+          <label class="dropzone" id="dropzone">
+            <input id="videoInput" name="video" type="file" accept="video/mp4,video/quicktime,video/webm" required>
+            <span class="drop-icon">＋</span>
+            <strong id="fileLabel">Выбрать исходное видео</strong>
+            <small>или перетащите файл сюда</small>
+          </label>
+          <div class="form-row">
+            <label>Название проекта<input id="slugInput" name="slug" placeholder="naprimer-moy-reels" pattern="[A-Za-z0-9_-]+"></label>
+            <label>Язык<select id="langInput" name="lang"><option value="ru">Русский</option><option value="auto">Определить</option><option value="en">Английский</option></select></label>
+          </div>
+          <button class="primary wide" type="submit">Подготовить видео</button>
+        </form>
+      </article>
+
+      <article class="card project-card">
+        <div class="step">02</div>
+        <h2>Текущий проект</h2>
+        <select id="projectSelect" class="project-select"><option value="">Проект ещё не выбран</option></select>
+        <div id="projectEmpty" class="empty">После подготовки здесь появятся части ролика и раскадровка.</div>
+        <div id="projectInfo" class="project-info hidden">
+          <div class="stats"><div><b id="durationStat">—</b><span>секунд</span></div><div><b id="partsStat">—</b><span>частей</span></div><div><b>9:16</b><span>формат</span></div></div>
+          <div class="part-list" id="partList"></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="workflow card">
+      <div class="section-head"><div><div class="step">03</div><h2>Конвейер</h2></div><p>Идите слева направо. Аккаунты нужно открыть только один раз.</p></div>
+      <div class="pipeline">
+        <div class="pipeline-item"><span>1</span><h3>ChatGPT</h3><p>Откроется отдельное окно Chrome. Войдите в свой аккаунт.</p><button class="secondary" data-action="chatgpt">Открыть ChatGPT</button></div>
+        <div class="pipeline-item"><span>2</span><h3>Сториборды</h3><p>Студия создаст шесть кадров для каждой части.</p><button class="secondary project-action" data-action="storyboards">Создать сториборды</button></div>
+        <div class="pipeline-item"><span>3</span><h3>Google Flow</h3><p>Войдите и создайте пустой проект, чтобы адрес содержал <b>/flow/project/</b>.</p><button class="secondary" data-action="flow-open">Открыть Flow</button></div>
+        <div class="pipeline-item accent"><span>4</span><h3>Монтаж</h3><p>Загрузка, очередь, скачивание частей и сборка финала.</p><button class="primary project-action" data-action="flow-run">Собрать ролик</button></div>
+      </div>
+    </section>
+
+    <section class="grid lower">
+      <article class="card editor-card">
+        <div class="section-head"><div><div class="step">НАСТРОЙКА</div><h2>Раскадровка</h2></div><button id="saveSpec" class="ghost project-action">Сохранить</button></div>
+        <p class="muted">Можно оставить автоматически созданный вариант или поправить тексты и описания кадров.</p>
+        <textarea id="specEditor" spellcheck="false" placeholder="Сначала выберите проект"></textarea>
+      </article>
+      <article class="card result-card">
+        <div class="step">04</div>
+        <h2>Результат</h2>
+        <div class="result-placeholder" id="resultPlaceholder"><span>▶</span><p>Финальный ролик появится после монтажа.</p></div>
+        <div class="result-actions">
+          <button class="secondary project-action" data-action="verify">Проверить речь</button>
+          <a id="downloadFinal" class="primary disabled" href="#">Скачать MP4</a>
+        </div>
+      </article>
+    </section>
+
+    <section class="card console-card">
+      <div class="section-head"><div><div class="step">ЖУРНАЛ</div><h2 id="jobTitle">Ожидание задачи</h2></div><span id="jobState" class="job-state">—</span></div>
+      <pre id="jobLog">Здесь будет виден ход обработки. Окно можно не трогать.</pre>
+    </section>
+  </main>
+
+  <footer>REELS STUDIO · файлы обрабатываются локально на вашем компьютере</footer>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+auth/
+scripts/.flow-geo.json
+workspace/reels/*
+!workspace/reels/.gitkeep
+!workspace/reels/_flow-upload/
+!workspace/reels/_flow-upload/.gitkeep
+!workspace/reels/engine/
+!workspace/reels/engine/.gitkeep
+npm-debug.log*
+.DS_Store
+Thumbs.db
